@@ -45,3 +45,39 @@ def demod_one_symbol(
     fsk_bin = int(round((peak_freq - F0) / synth_res_val))
     fsk_bin = max(0, min(constants.NUM_FSK_BINS - 1, fsk_bin))
     return fsk_bin, peak_freq, float(psd_masked[peak_bin])
+
+
+def demod_one_symbol_with_collision(
+    sig_segment: np.ndarray,
+    F0: float,
+    synth_res_val: float,
+    chan_mask: np.ndarray,
+    collision_threshold: float = 0.5,
+    null_bins: int = 2,
+) -> tuple[int, float, float, bool]:
+    """Like :func:`demod_one_symbol` but also detects potential collisions.
+
+    Returns ``(fsk_bin, peak_freq, peak_power, collision_detected)``.
+
+    A collision is flagged when a secondary peak (outside ±null_bins of the
+    primary) exceeds ``collision_threshold`` times the primary peak power.
+    """
+    spectrum = np.fft.fft(sig_segment)
+    psd = np.abs(spectrum) ** 2
+    psd_masked = psd.copy()
+    psd_masked[~chan_mask] = 0.0
+
+    peak_bin = int(np.argmax(psd_masked))
+    peak_freq = interp_peak(psd_masked, peak_bin, constants.fft_freqs)
+    peak_power = float(psd_masked[peak_bin])
+
+    psd_second = psd_masked.copy()
+    null_start = max(0, peak_bin - null_bins)
+    null_end = min(len(psd_second), peak_bin + null_bins + 1)
+    psd_second[null_start:null_end] = 0.0
+    second_peak_power = float(np.max(psd_second))
+    collision = second_peak_power > (collision_threshold * peak_power)
+
+    fsk_bin = int(round((peak_freq - F0) / synth_res_val))
+    fsk_bin = max(0, min(constants.NUM_FSK_BINS - 1, fsk_bin))
+    return fsk_bin, peak_freq, peak_power, collision

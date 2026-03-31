@@ -110,6 +110,9 @@ TIME_TOL: float = 0.5
 # Verbose flag (override for diagnostics)
 VERBOSE: bool = False
 
+# Log collision detections (secondary peaks during demodulation)
+LOG_COLLISIONS: bool = False
+
 # ---------------------------------------------------------------------------
 # Visualisation spectrogram defaults (used by compute_spec_chunk)
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ from scipy.signal import spectrogram as scipy_spectrogram
 
 from . import constants
 from .chipset import cs_inc, get_last_attempt, identify_chipset
-from .demod import build_chan_mask, demod_one_symbol, interp_peak
+from .demod import build_chan_mask, demod_one_symbol, demod_one_symbol_with_collision, interp_peak
 from .detector import detect_preambles
 from .whitening import data_de_scrambling
 
@@ -278,16 +278,24 @@ def _decode_v1(signal, start_sample, sps):
     # Demodulate header (6 symbols, same channel)
     chan_mask = build_chan_mask(F0, synth_res_val)
     header_syms = []
+    header_collisions = 0
     half_sym = nsym // 2
     for h in range(constants.NUM_HEADER_SYMS):
         sym_abs_idx = constants.PREAMBLE_LEN + h
         s0 = start_sample + sym_abs_idx * slot + half_sym
         if s0 + nsym > len(signal):
             return None, None
-        fsk_bin, _, _ = demod_one_symbol(
+        fsk_bin, _, _, collision = demod_one_symbol_with_collision(
             signal[s0:s0 + nsym], F0, synth_res_val, chan_mask,
         )
         header_syms.append(fsk_bin)
+        if collision:
+            header_collisions += 1
+            if constants.LOG_COLLISIONS:
+                print(f"[COLLISION] Header symbol {h}: collision detected at F0={F0:.1f} Hz")
+
+    if constants.LOG_COLLISIONS and header_collisions > 0:
+        print(f"[COLLISION] Header total: {header_collisions}/{constants.NUM_HEADER_SYMS} symbols with collisions")
 
     _last_attempt["header_syms"] = list(header_syms)
 
@@ -321,6 +329,7 @@ def _decode_v1(signal, start_sample, sps):
     hopping_seq = constants.HOPPING_SEQS[hop_seq_idx]
     _last_attempt.update(
         header_n_corr=int(header_n_corr),
+        header_collisions=header_collisions,
         channel_num=channel_num, hop_seq_idx=hop_seq_idx,
         pkt_len_idx=pkt_len_idx, num_pdu_symbols=num_pdu_symbols,
     )
@@ -340,6 +349,7 @@ def _decode_v1(signal, start_sample, sps):
     f0_cur = F0
     mask = build_chan_mask(F0, synth_res_val)
     pdu_syms = []
+    pdu_collisions = 0
 
     for p_idx in range(num_pdu_symbols):
         sym_abs_idx = constants.PREAMBLE_LEN + constants.NUM_HEADER_SYMS + p_idx
@@ -355,10 +365,14 @@ def _decode_v1(signal, start_sample, sps):
             mask = build_chan_mask(f0_cur, synth_res_val)
             cur_ch = nxt
 
-        fsk_bin, _, _ = demod_one_symbol(
+        fsk_bin, _, _, collision = demod_one_symbol_with_collision(
             signal[s0:s0 + nsym], f0_cur, synth_res_val, mask,
         )
         pdu_syms.append(fsk_bin)
+        if collision:
+            pdu_collisions += 1
+            if constants.LOG_COLLISIONS:
+                print(f"[COLLISION] PDU symbol {p_idx}: collision detected at F0={f0_cur:.1f} Hz, channel={cur_ch}")
 
     if len(pdu_syms) != num_pdu_symbols:
         _last_attempt["reason"] = "pdu_incomplete"
@@ -371,6 +385,7 @@ def _decode_v1(signal, start_sample, sps):
 
     if pdu_n_corr < 0:
         _last_attempt["pdu_syms_head"] = pdu_syms[:10]
+        _last_attempt["pdu_collisions"] = pdu_collisions
         cs_inc(chipset_name, "pdu_fail")
         if _diag:
             print(
@@ -420,6 +435,13 @@ def _decode_v1(signal, start_sample, sps):
             f"data={mac_syms}, pdu_demod={pdu_syms}"
         )
 
+    total_collisions = header_collisions + pdu_collisions
+    if constants.LOG_COLLISIONS and total_collisions > 0:
+        print(
+            f"[COLLISION] Packet 0x{ntw_id:08X} seq={seq_num}: "
+            f"{header_collisions} header + {pdu_collisions} PDU = {total_collisions} total collisions"
+        )
+
     return (
         {"F0_hz": float(F0), "total_energy_dB": float(total_energy_dBFS)},
         {
@@ -429,6 +451,8 @@ def _decode_v1(signal, start_sample, sps):
             "chipset": chipset_name,
             "channel_num": channel_num, "hop_seq_idx": hop_seq_idx,
             "header_n_corr": int(header_n_corr), "pdu_n_corr": int(pdu_n_corr),
+            "header_collisions": header_collisions,
+            "pdu_collisions": pdu_collisions,
             "measured_synth_res": round(measured_synth_res, 2),
             "num_pdu_symbols": num_pdu_symbols,
             "freq_delta_hz": round(freq_delta_hz, 1),
