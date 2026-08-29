@@ -54,7 +54,7 @@ CHANNEL_SPACING: float = 25_750.0  # Hz
 SYNTH_RES: dict[str, float] = {
     "ti": 366.2119,
     "nordic": 488.28125,
-    "silabs": 296.0,
+    "silabs": 297.546386719,
     "esp": 400.0,
     "atmosic": 500.0,
 }
