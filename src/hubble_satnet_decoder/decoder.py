@@ -24,20 +24,25 @@ _v1_diag_counter = 0
 
 def _rs_decode(
     symbols, rs_n_array: list[int], rs_k_array: list[int]
-) -> tuple[np.ndarray, int]:
-    """Reed-Solomon decode over GF(64). Returns ``(decoded, n_corrections)``."""
+) -> tuple[np.ndarray, int, list[int]]:
+    """Reed-Solomon decode over GF(64).
+
+    Returns ``(decoded, n_corrections, error_positions)``: the corrected data
+    symbols, how many symbols were corrected, and their indices in the received
+    codeword (sorted). On failure ``n_corrections`` is -1 and the list is empty.
+    """
     sym_list = symbols.tolist() if isinstance(symbols, np.ndarray) else list(symbols)
     try:
         idx = rs_n_array.index(len(sym_list))
     except ValueError:
-        return np.full(0, -1, dtype=int), -1
+        return np.full(0, -1, dtype=int), -1, []
     rs_k = rs_k_array[idx]
     num_ecc = rs_n_array[idx] - rs_k
     try:
         rx_syms, _, errata_pos = rs.rs_correct_msg(sym_list, num_ecc, fcr=1)
-        return np.array(rx_syms), len(errata_pos)
+        return np.array(rx_syms), len(errata_pos), sorted(int(p) for p in errata_pos)
     except Exception:
-        return np.full(rs_k, -1, dtype=int), -1
+        return np.full(rs_k, -1, dtype=int), -1, []
 
 
 # ===========================================================================
@@ -294,7 +299,7 @@ def _decode_v1(signal, start_sample, sps):
     _last_attempt["header_syms"] = list(header_syms)
 
     # RS decode header
-    header_decoded, header_n_corr = _rs_decode(
+    header_decoded, header_n_corr, header_err_pos = _rs_decode(
         np.array(header_syms, dtype=int), constants.RS_N_V1, constants.RS_K_V1
     )
     if header_n_corr < 0:
@@ -322,7 +327,7 @@ def _decode_v1(signal, start_sample, sps):
     num_pdu_symbols = constants.RS_N_V1[pkt_len_idx + 1]
     hopping_seq = constants.HOPPING_SEQS[hop_seq_idx]
     _last_attempt.update(
-        header_n_corr=int(header_n_corr),
+        header_n_corr=int(header_n_corr), header_err_pos=header_err_pos,
         channel_num=channel_num, hop_seq_idx=hop_seq_idx,
         pkt_len_idx=pkt_len_idx, num_pdu_symbols=num_pdu_symbols,
     )
@@ -369,7 +374,14 @@ def _decode_v1(signal, start_sample, sps):
     # De-scramble + RS decode PDU
     pdu_raw = np.array(pdu_syms, dtype=int)
     de_scrambled = data_de_scrambling(pdu_raw, channel_num)
-    pdu_decoded, pdu_n_corr = _rs_decode(de_scrambled, constants.RS_N_V1, constants.RS_K_V1)
+    # The received PDU codeword before error correction, de-whitened so it
+    # lines up symbol for symbol with what RS corrects (kept on failure too)
+    pdu_syms_rx = [int(s) for s in de_scrambled]
+    _last_attempt["pdu_syms_rx"] = pdu_syms_rx
+    pdu_decoded, pdu_n_corr, pdu_err_pos = _rs_decode(
+        de_scrambled, constants.RS_N_V1, constants.RS_K_V1
+    )
+    _last_attempt.update(pdu_n_corr=int(pdu_n_corr), pdu_err_pos=pdu_err_pos)
 
     if pdu_n_corr < 0:
         _last_attempt["pdu_syms_head"] = pdu_syms[:10]
@@ -436,6 +448,11 @@ def _decode_v1(signal, start_sample, sps):
             "chipset": chipset_name,
             "channel_num": channel_num, "hop_seq_idx": hop_seq_idx,
             "header_n_corr": int(header_n_corr), "pdu_n_corr": int(pdu_n_corr),
+            # Received codewords before RS correction, and where RS corrected
+            "header_syms": [int(s) for s in header_syms],
+            "header_err_pos": header_err_pos,
+            "pdu_syms_rx": pdu_syms_rx,
+            "pdu_err_pos": pdu_err_pos,
             "measured_synth_res": round(measured_synth_res, 2),
             "num_pdu_symbols": num_pdu_symbols,
             "freq_delta_hz": round(freq_delta_hz, 1),
@@ -455,6 +472,15 @@ def decode_signal(signal):
     - *decoded_packets*: successfully decoded packets with MAC fields.
     - *detection_list*:  all preamble detections (for box overlay on spectrogram).
     - *all_attempts*:    per-detection decode outcomes (chipset, decoded, reason).
+
+    v1 packets and attempts carry the received codewords before error
+    correction, as lists of 6-bit symbols: ``header_syms`` (once the header was
+    demodulated) and ``pdu_syms_rx`` (de-whitened; once the PDU was
+    demodulated, so also on ``pdu_fail``). ``header_err_pos`` /
+    ``pdu_err_pos`` are the codeword indices RS corrected, once that RS decode
+    ran (empty, with ``*_n_corr`` -1, when it failed). RS can also "succeed" on
+    the wrong codeword when there are too many errors, so treat them as the
+    decoder's view, not ground truth.
     """
     _last_attempt = get_last_attempt()
     sig = signal.copy()
