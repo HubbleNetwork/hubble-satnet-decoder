@@ -13,6 +13,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # pyhubblenetwork always pulls the image before starting it, so the test
+    # image has to come from a registry, not just the runner's local images
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
     steps:
       - name: Checkout hubble-satnet-decoder
         uses: actions/checkout@v6
@@ -35,14 +43,16 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
 
-      - name: Build local image with local decoder
+      - name: Build test image with local decoder and push to local registry
         uses: docker/build-push-action@v6
         with:
           context: ./sdr-docker/
           build-args: USE_LOCAL_DECODER=1
-          load: true
-          tags: sdr-docker:pr-test
+          push: true
+          tags: localhost:5000/sdr-docker:pr-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -60,5 +70,5 @@ jobs:
 
       - name: Run sat integration tests
         env:
-          SDR_DOCKER_IMAGE: sdr-docker:pr-test
+          SDR_DOCKER_IMAGE: localhost:5000/sdr-docker:pr-test
         run: pytest pyhubblenetwork/tests/test_sat_integration.py -v --tb=short
