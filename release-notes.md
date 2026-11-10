@@ -1,4 +1,5 @@
-## [1.2.1] - 2026-08-31
+## [1.3.0] - 2026-11-12
 
-### Changed
-- Synth_res value for Silabs (296 -> 297.546386719)
+### Added
+- v1 decode results carry the header and PDU codewords as received, before RS
+  correction, and the corrected symbol positions
