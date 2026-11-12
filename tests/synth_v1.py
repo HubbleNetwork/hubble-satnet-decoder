@@ -26,7 +26,7 @@ def v1_codewords(*, channel=4, hop_seq_idx=1, pkt_len_idx=1, seq=321,
     # The header has 4 bits of channel: 16-18 alias to 0-2 (the decoder
     # resolves them by frequency)
     hdr_bits = f"{1:04b}{pkt_len_idx:02b}{hop_seq_idx:02b}{channel & 0xF:04b}"
-    header = _rs_codeword(_bits_to_syms(hdr_bits, 2), constants.RS_N_V1[0])
+    header = _rs_codeword(_bits_to_syms(hdr_bits, constants.RS_K_V1[0]), constants.RS_N_V1[0])
 
     k = constants.RS_K_V1[pkt_len_idx + 1]
     n = constants.RS_N_V1[pkt_len_idx + 1]
